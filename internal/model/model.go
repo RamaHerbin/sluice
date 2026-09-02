@@ -7,8 +7,18 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"time"
+)
+
+// Limits on header rules, shared by the controller (annotations) and the
+// router (validation) so the two never drift.
+const (
+	// MaxHeaderRules bounds the number of rules per direction on one route.
+	MaxHeaderRules = 32
+	// MaxHeaderNameLength bounds a header name in bytes.
+	MaxHeaderNameLength = 256
 )
 
 // PathType selects how a Route's Path is matched against a request path.
@@ -76,10 +86,34 @@ type Backend struct {
 
 // HeaderRule sets a header on the upstream request or on the client response.
 // Value is a raw placeholder template; it is parsed and validated at compile
-// time and evaluated at request time.
+// time and evaluated at request time. Set semantics only: no append, no
+// delete.
 type HeaderRule struct {
 	Name  string
 	Value string
+}
+
+// ParseHeaderRules parses the annotation format shared by
+// sluice.dev/request-headers and sluice.dev/response-headers: one
+// "Name: value" per line, split at the first colon, both sides trimmed, blank
+// lines skipped, no comment syntax. It rejects a line without a colon, an
+// empty name, an empty value, duplicate names (case-insensitive), more than
+// MaxHeaderRules rules and names longer than MaxHeaderNameLength. It does not
+// validate the name as a token nor parse the value as a template; that is
+// the router's job through the placeholders package.
+func ParseHeaderRules(text string) ([]HeaderRule, error) {
+	// TODO(wave-2, model+router agent): implement.
+	return nil, errors.New("model: not implemented")
+}
+
+// ValidateHeaderRules applies the structural checks of ParseHeaderRules to
+// rules built by other means: non-empty names and values, no duplicate names
+// (case-insensitive), at most MaxHeaderRules entries, names within
+// MaxHeaderNameLength. Compile calls it so snapshots not produced by the
+// controller are held to the same rules.
+func ValidateHeaderRules(rules []HeaderRule) error {
+	// TODO(wave-2, model+router agent): implement.
+	return errors.New("model: not implemented")
 }
 
 // Route is one host/path rule pointing at a backend.

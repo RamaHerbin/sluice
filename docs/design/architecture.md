@@ -44,7 +44,7 @@ Identity: `Version` (monotonic `uint64`) and `Hash` are stamped by `router.Store
 ### router
 
 - `Compile(*model.Snapshot) (*Table, error)` is the sole validator. Errors wrap `*RouteError{Key model.RouteKey; Err error}` so a log line names the offending Ingress.
-- `Table{Version, Hash, BuiltAt}` plus unexported matching structures: exact-host map, wildcard-host slice, catch-all (empty host). Per host: an exact-path map and a prefix slice sorted by length descending, linear scan. Pedagogical and fast enough for hundreds of routes; a trie is a later, local change.
+- `Table{Version, Hash, BuiltAt}` plus unexported matching structures: exact-host map, wildcard-host map keyed by the literal `*.suffix` (a wildcard matches one label, so the candidate key is unique), catch-all (empty host). Per host: an exact-path map and a prefix slice sorted by length descending, linear scan. Pedagogical and fast enough for hundreds of routes; a trie is a later, local change.
 - `Table.Match(host, path) (*Route, bool)`. Host is lowercased and its `:port` stripped.
 - `Route{Key; Host; Path; PathType; Namespace; Service; Backend upstream.Picker (never nil, Len()==0 means 503); RequestHeaders, ResponseHeaders []Header{Name; Value placeholders.Template}}`.
 - `Store{mu sync.Mutex; cur atomic.Pointer[Table]; version uint64}`: `NewStore()` starts at `Empty()` so the proxy never sees nil; `Current()` is lock-free; `Apply(snap) (t, changed, err)` compiles under the mutex and swaps only on success.
@@ -69,7 +69,7 @@ Priority rules:
 - `ServeHTTP`: `t := p.Current()` once, `route, ok := t.Match(...)` else 404, `addr, ok := route.Backend.Pick()` else 503, store `{route, addr}` in the request context, `rp.ServeHTTP`, access log. Status is captured by a small `ResponseWriter` wrapper implementing `Unwrap()` so `Flush`/`Hijack` keep working through `http.ResponseController`.
 - `ReverseProxy.Rewrite` (not `Director`): `pr.SetURL(&url.URL{Scheme: "http", Host: addr})`, `pr.Out.Host = pr.In.Host` (Ingress semantics: the backend sees the original Host), `pr.SetXForwarded()` sets X-Forwarded-For/Host/Proto from our view of the connection and drops client-supplied values (no trusted-proxy list in the MVP), then request header templates are evaluated and set on `pr.Out.Header`.
 - `ModifyResponse` evaluates response header templates from the state carried in the request context.
-- `ErrorHandler`: `context.Canceled` means the client left: log at debug, write nothing, no upstream-error metric. `net.Error.Timeout()` -> 504. Anything else -> 502. Metric `kind` is `dial|timeout|other`.
+- `ErrorHandler`, in this order: `context.Canceled` means the client left: log at debug, write nothing, record status 499 (`proxy.StatusClientClosedRequest`), no upstream-error metric. `net.Error` with `Timeout()` -> 504, kind `timeout`. `*net.OpError` with `Op == "dial"` -> 502, kind `dial`. Anything else -> 502, kind `other`. Never test `errors.Is(err, context.DeadlineExceeded)`: the transport's header-timeout error satisfies it on Go 1.26.
 - Transport: `Dialer{Timeout: 5s, KeepAlive: 30s}`, `ResponseHeaderTimeout: 30s`, `IdleConnTimeout: 90s`, `MaxIdleConnsPerHost: 64`, `ForceAttemptHTTP2: false`. Server: `ReadHeaderTimeout: 10s`, `IdleTimeout: 120s`, no `WriteTimeout` (streaming).
 - Request ID: the middleware guarantees an inbound `X-Request-ID`, so `ReverseProxy` forwards it for free and the access log reads it.
 
@@ -91,7 +91,7 @@ Priority rules:
 
 ### observability
 
-- `NewLogger(level, json)`, `RequestID(next)` middleware, `Metrics` (satisfies both consumer interfaces), `Readiness{atomic.Bool}` with `Set` and `Handler`, `AdminMux(readiness, gatherer)` serving `/healthz`, `/readyz`, `/metrics` on a separate port.
+- `NewLogger(level, json)`, `RequestID(next)` middleware, `Metrics` (satisfies both consumer interfaces), `Readiness{atomic.Bool}` with `Set` and `Handler`, `AdminMux(readiness, metrics)` serving `/healthz`, `/readyz`, `/metrics` on a separate port. `NewMetrics()` owns a private registry so `main` never imports Prometheus.
 - Metrics: `sluice_http_requests_total{route,code}`, `sluice_http_request_duration_seconds{route}`, `sluice_upstream_errors_total{route,kind}`, `sluice_config_version`, `sluice_config_applied_total`, `sluice_config_rejected_total`, `sluice_ingresses_skipped_total`, `sluice_routes`, `sluice_ready`. Labels are route key and status only, never host, path or headers.
 - Access log: request id, method, host, path (no query string), status, duration, route key, upstream. Never headers or bodies.
 
@@ -134,3 +134,17 @@ Priority rules:
 5. Matching edge cases: `/foo` vs `/foobar`, trailing slashes, `Host: example.com:8080`, uppercase hosts, wildcard matching more than one label. Normalization inside `Match` plus a table-driven test file that encodes the Ingress spec examples.
 
 Also watched: metric label cardinality and sensitive data (route key and status only), and readiness reported before informers have synced (gated on `Synced()`).
+
+## 7. Amendments after wave 1 (2026-09-03)
+
+Validated by the throwaway prototype (`docs/design/dataplane.md`) and the placeholders design (`docs/design/placeholders.md`); all folded into the contract files.
+
+- Wildcard hosts live in a map keyed by `*.suffix`. Path priority is "exact-path map first, then longest prefix", equivalent to the rule above.
+- `Match` host normalization: strip `:port` when `net.SplitHostPort` accepts the value, strip one trailing dot, lowercase. Bracketed IPv6 literals keep their brackets and only match empty-host routes. Paths are matched as received.
+- The status-capturing `ResponseWriter` ignores `WriteHeader` codes below 200 except 101 (ReverseProxy forwards 103 Early Hints).
+- A client leaving mid-body never reaches `ErrorHandler`; it surfaces as `panic(http.ErrAbortHandler)`. Deferred logging and metrics tolerate the unwind.
+- Per-request context state carries the inbound `*http.Request`; `resp.Request` in `ModifyResponse` is the rewritten clone and must not feed placeholders.
+- `NewRoundRobin` copies its input slice.
+- Header rules: annotation parsing lives in `model.ParseHeaderRules`, structural validation in `model.ValidateHeaderRules` (limits `MaxHeaderRules = 32`, `MaxHeaderNameLength = 256`), name validation and templates in `placeholders`. `MaxValueLength = 8192`: longer evaluated values are dropped. `{http.request.host}` strips the port and keeps case; `{http.request.path}` is `URL.EscapedPath()`; header variables join repeated lines with `", "`.
+- `observability.NewMetrics()` owns the registry; `AdminMux(readiness, metrics)`.
+- The race hammer in the real tests must keep swapping for the whole duration of the traffic (a bounded loop with a short sleep, at least 1000 swaps), because 1000 back-to-back atomic stores finish before the first request.

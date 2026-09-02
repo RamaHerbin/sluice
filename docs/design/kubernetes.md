@@ -35,7 +35,7 @@ Types: `Ingress`, `IngressClass` in `k8s.io/api/networking/v1` (`PathTypeExact/P
 
 - `rules[].host` empty = all hosts. `*.example.com` matches exactly one label (`bar.example.com`), not `example.com` nor `a.b.example.com`. Wildcard only as the leftmost label.
 - `pathType: Exact` is case-sensitive, trailing slash significant. `Prefix` is element-wise on `/`: `/foo/bar` matches `/foo/bar/baz`, not `/foo/barbaz`; `/foo` matches `/foo/`. Longest match wins. `ImplementationSpecific` is treated as Prefix (documented). `path` must start with `/`; an empty path (allowed only for ImplementationSpecific) is treated as `/`.
-- Precedence: exact host > wildcard host > empty host; then Exact over Prefix; then longest path; then oldest Ingress, then namespace/name.
+- Precedence: exact host > wildcard host > empty host (no fallthrough); then the longest matching path, Exact beating Prefix at equal length (implemented as exact-path map first, then longest prefix, which is equivalent); then oldest Ingress, then namespace/name.
 - `backend.service.port.name` XOR `.number`. Resource backends are skipped with a warning.
 - `defaultBackend`: skipped in the MVP (unmatched request = 404 with a debug log). Ingress status (`status.loadBalancer`): skipped; it would need the `ingresses/status` `update` verb and a publish address.
 

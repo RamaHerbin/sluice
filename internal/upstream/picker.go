@@ -14,7 +14,8 @@ type Picker interface {
 }
 
 // NewRoundRobin returns a Picker rotating over addrs in order, starting at the
-// first one. An empty addrs yields a Picker whose Pick always reports ok=false.
+// first one. addrs is copied, so the caller may reuse its slice. An empty
+// addrs yields a Picker whose Pick always reports ok=false.
 func NewRoundRobin(addrs []string) Picker {
 	// TODO(wave-2, proxy+upstream agent): implement with atomic.Uint32.
 	return roundRobin{}

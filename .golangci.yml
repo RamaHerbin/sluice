@@ -1,0 +1,22 @@
+# golangci-lint v2 configuration (golangci-lint 2.13.2).
+# Standard linter set plus misspell and unconvert; gofmt and goimports as
+# formatters with the module path as the local import group.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/RamaHerbin/sluice

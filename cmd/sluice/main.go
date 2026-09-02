@@ -17,14 +17,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/RamaHerbin/sluice/internal/controller"
 	"github.com/RamaHerbin/sluice/internal/model"
 	"github.com/RamaHerbin/sluice/internal/observability"
 	"github.com/RamaHerbin/sluice/internal/proxy"
 	"github.com/RamaHerbin/sluice/internal/router"
 )
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 // Compile-time checks that observability satisfies the consumer interfaces.
 var (
@@ -64,8 +65,7 @@ func run() error {
 	}
 	log := observability.NewLogger(level, *logJSON)
 
-	reg := prometheus.NewRegistry()
-	metrics := observability.NewMetrics(reg)
+	metrics := observability.NewMetrics()
 	ready := &observability.Readiness{}
 
 	store := router.NewStore()
@@ -89,7 +89,7 @@ func run() error {
 	}
 	adminSrv := &http.Server{
 		Addr:              *admin,
-		Handler:           observability.AdminMux(ready, reg),
+		Handler:           observability.AdminMux(ready, metrics),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -102,7 +102,7 @@ func run() error {
 
 	ready.Set(true)
 	metrics.SetReady(true)
-	log.Info("sluice started", "listen", *listen, "admin", *admin)
+	log.Info("sluice started", "version", version, "listen", *listen, "admin", *admin)
 
 	select {
 	case <-ctx.Done():

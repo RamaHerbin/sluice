@@ -28,8 +28,12 @@ const (
 	VarUpstreamAddress = "upstream.address"
 )
 
-// MaxTemplateLength bounds the size of a template source string.
+// MaxTemplateLength bounds the size of a template source string in bytes.
 const MaxTemplateLength = 4096
+
+// MaxValueLength bounds the size of an evaluated value in bytes. Longer
+// results are dropped: Evaluate returns "" and the header is not set.
+const MaxValueLength = 8192
 
 // Context carries the request-time values a template can read. Any field may
 // be zero; missing values evaluate to the empty string.
@@ -62,19 +66,30 @@ func (e *UnknownVariableError) Error() string {
 }
 
 // ErrUnbalancedBraces is returned when a template has a "{" without a
-// matching "}" or vice versa.
+// matching "}" or vice versa. There is no escape syntax: braces are always
+// structural.
 var ErrUnbalancedBraces = errors.New("unbalanced braces in placeholder template")
 
-// Parse compiles src into a Template. Unknown variables and unbalanced braces
-// are errors. Sources longer than MaxTemplateLength are rejected.
+// ErrTemplateTooLong is returned when a template source exceeds
+// MaxTemplateLength.
+var ErrTemplateTooLong = errors.New("placeholder template exceeds MaxTemplateLength")
+
+// Parse compiles src into a Template. Unknown variables (including empty
+// names and header names that are not RFC 9110 tokens) are reported as
+// *UnknownVariableError, unbalanced or nested braces as ErrUnbalancedBraces,
+// and sources longer than MaxTemplateLength as ErrTemplateTooLong. Error
+// messages never echo the template source, which may hold secrets.
 func Parse(src string) (Template, error) {
 	// TODO(wave-2, placeholders agent): implement.
 	return Template{}, errors.New("placeholders: not implemented")
 }
 
-// Evaluate renders the template against c. Missing values render as "".
-// CR and LF characters are removed from the result so a value can never
-// inject a header line.
+// Evaluate renders the template against c by concatenating its segments.
+// Missing values render as "". CR and LF characters are removed from the
+// result so a value can never inject a header line, and a result longer than
+// MaxValueLength is dropped (Evaluate returns ""). Results are never
+// re-parsed. c.Request must be the inbound request as received by the proxy,
+// never the rewritten outbound request.
 func (t Template) Evaluate(c Context) string {
 	// TODO(wave-2, placeholders agent): implement.
 	return ""
@@ -90,15 +105,19 @@ func (t Template) IsStatic() bool {
 	return true
 }
 
-// Known reports whether name is an allowed variable.
+// Known reports whether name is an allowed variable: one of the fixed names
+// above, or HeaderPrefix followed by a non-empty RFC 9110 token.
 func Known(name string) bool {
 	// TODO(wave-2, placeholders agent): implement.
 	return false
 }
 
 // ValidateHeaderName reports whether name may be set by a header rule. It must
-// be a valid RFC 9110 token and must not be Host, Content-Length,
-// Transfer-Encoding or a hop-by-hop header.
+// be a non-empty RFC 9110 token of at most model.MaxHeaderNameLength bytes and
+// must not be (case-insensitively) Host, Content-Length, Transfer-Encoding,
+// Connection, Keep-Alive, Proxy-Authenticate, Proxy-Authorization,
+// Proxy-Connection, TE, Trailer or Upgrade. X-Forwarded-* and X-Request-ID
+// stay settable on purpose (see docs/design/placeholders.md).
 func ValidateHeaderName(name string) error {
 	// TODO(wave-2, placeholders agent): implement.
 	return errors.New("placeholders: not implemented")

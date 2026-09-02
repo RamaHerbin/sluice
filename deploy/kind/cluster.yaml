@@ -1,0 +1,13 @@
+# kind cluster for local development. One control-plane node; the host port
+# 127.0.0.1:8080 is mapped to NodePort 30080, where the sluice Service listens.
+# Create it with "make kind-up" (hack/kind-up.sh).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: sluice
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+        protocol: TCP

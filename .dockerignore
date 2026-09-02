@@ -1,0 +1,17 @@
+# Only go.mod, go.sum and the Go sources are needed to build the image.
+.git
+.github
+.gitignore
+.golangci.yml
+.dockerignore
+Dockerfile
+Makefile
+bin
+docs
+deploy
+examples
+hack
+**/*.md
+*.test
+*.out
+prototypes

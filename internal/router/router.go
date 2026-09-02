@@ -49,8 +49,11 @@ type Table struct {
 	Hash    string
 	BuiltAt time.Time
 
-	// TODO(wave-2, model+router agent): unexported matching structures
-	// (exact hosts map, wildcard hosts slice, catch-all).
+	// TODO(wave-2, model+router agent): unexported matching structures:
+	// exact hosts map; wildcard hosts map keyed by the literal "*.suffix"
+	// (a wildcard matches exactly one label, so the only candidate key for a
+	// request host is "*" + host[firstDot:]); catch-all for empty host. Per
+	// host: an exact-path map and a prefix slice sorted by length descending.
 	routes []*Route
 }
 
@@ -65,9 +68,13 @@ func (e *RouteError) Error() string { return fmt.Sprintf("route %s: %v", e.Key, 
 func (e *RouteError) Unwrap() error { return e.Err }
 
 // Compile validates s and builds a Table. It is the sole validator of the
-// model: unknown placeholders, duplicate routes, invalid paths or hosts,
-// unresolved backends and invalid header names are all reported here, wrapped
-// in a *RouteError. Nothing is partially applied on error.
+// model. Rejected, each wrapped in a *RouteError: a path not starting with
+// "/"; an invalid or non-lowercase host, or a wildcard not in the leftmost
+// label; a duplicate (host, path, type) with the same route key; a backend
+// key with no matching Backend; header rules failing
+// model.ValidateHeaderRules or placeholders.ValidateHeaderName; a header
+// value failing placeholders.Parse. Pickers are built from Ready endpoints
+// only. Nothing is partially applied on error.
 func Compile(s *model.Snapshot) (*Table, error) {
 	// TODO(wave-2, model+router agent): implement.
 	return nil, errors.New("router: not implemented")
@@ -79,7 +86,19 @@ func Empty() *Table {
 }
 
 // Match returns the best route for host and path, or false when none matches.
-// host is lowercased and its ":port" suffix stripped before matching.
+//
+// Host normalization: the ":port" suffix is removed when net.SplitHostPort
+// accepts the value, one trailing dot is removed, and the result is
+// lowercased. A bracketed IPv6 literal keeps its brackets and therefore only
+// matches empty-host routes, which is fine because an Ingress host is never
+// an IP address. The path is matched as received (no percent-decoding, no
+// dot-segment cleanup).
+//
+// Priority: exact host, then wildcard host, then empty host, with no
+// fallthrough to a less specific host when its paths do not match. Within a
+// host: an exact-path hit wins, otherwise the longest matching prefix. This
+// is equivalent to "longest path, Exact beats Prefix at equal length"
+// because an Exact match always spans the whole request path.
 func (t *Table) Match(host, path string) (*Route, bool) {
 	// TODO(wave-2, model+router agent): implement priority rules.
 	return nil, false

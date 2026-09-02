@@ -66,7 +66,11 @@ type Warning struct {
 
 // Translate converts the claimed Ingresses into a snapshot. It never fails:
 // an Ingress that cannot be translated is skipped and reported as a Warning,
-// so one bad object never blocks updates for the rest of the cluster.
+// so one bad object never blocks updates for the rest of the cluster. Header
+// annotations are parsed with model.ParseHeaderRules and their values with
+// placeholders.Parse; a resource backend or an ExternalName Service also
+// skips the Ingress. A missing Service or zero ready endpoints keeps the
+// route with an empty backend, which the proxy answers with 503.
 func Translate(in Input) (*model.Snapshot, []Warning) {
 	// TODO(wave-2, controller agent): implement.
 	return &model.Snapshot{}, nil

@@ -33,17 +33,24 @@ func RequestID(next http.Handler) http.Handler {
 	return next
 }
 
-// Metrics holds every Prometheus collector sluice exposes. It satisfies
-// proxy.Metrics and controller.Metrics.
+// Metrics holds every Prometheus collector sluice exposes, together with the
+// registry they are registered on. It satisfies proxy.Metrics and
+// controller.Metrics. Labels are route keys and status codes only.
 type Metrics struct {
+	reg *prometheus.Registry
 	// TODO(wave-2, observability agent): collectors.
 }
 
-// NewMetrics creates and registers the collectors on reg.
-func NewMetrics(reg prometheus.Registerer) *Metrics {
-	// TODO(wave-2, observability agent): implement.
-	return &Metrics{}
+// NewMetrics creates a private registry, registers the sluice collectors plus
+// the standard Go and process collectors on it, and returns the handle.
+// Keeping the registry here means no other package imports Prometheus.
+func NewMetrics() *Metrics {
+	// TODO(wave-2, observability agent): implement collectors.
+	return &Metrics{reg: prometheus.NewRegistry()}
 }
+
+// Gatherer exposes the registry for tests and for AdminMux.
+func (m *Metrics) Gatherer() prometheus.Gatherer { return m.reg }
 
 // ObserveRequest records one completed request (proxy.Metrics).
 func (m *Metrics) ObserveRequest(route string, status int, d time.Duration) {}
@@ -87,10 +94,10 @@ func (r *Readiness) Handler() http.Handler {
 
 // AdminMux serves /healthz (always 200 while the process runs), /readyz and
 // /metrics. It is meant for a separate listener, never the proxy port.
-func AdminMux(r *Readiness, g prometheus.Gatherer) *http.ServeMux {
+func AdminMux(r *Readiness, m *Metrics) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.Handle("/readyz", r.Handler())
-	mux.Handle("/metrics", promhttp.HandlerFor(g, promhttp.HandlerOpts{}))
+	mux.Handle("/metrics", promhttp.HandlerFor(m.Gatherer(), promhttp.HandlerOpts{}))
 	return mux
 }
