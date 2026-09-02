@@ -36,7 +36,7 @@ Design documents live in `docs/design/`, decisions in `docs/adr/`.
 
 ## Status
 
-Under construction. See `docs/design/roadmap.md` for the vertical slices and what is done.
+Experimental. Slices 1 to 5 of the roadmap are implemented and tested without a cluster: static and dynamic routing, atomic configuration swaps, the Kubernetes controller against a fake API server, and placeholders. The kind demo (slice 6) has its manifests and scripts but has not been run yet. See `docs/design/roadmap.md` for details and `docs/testing.md` for the fourteen scenarios and their tests.
 
 ## Scope and non-goals
 
