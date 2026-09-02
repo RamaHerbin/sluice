@@ -1,0 +1,68 @@
+# Demo backend "echo-a": an HTTP echo server that answers every request with a
+# JSON document describing what it received (method, path, headers, and the
+# pod hostname). The Service exposes it on port 80 inside the cluster; the
+# Ingress in ingress.yaml sends /a here.
+#
+# The readiness probe matters for the demo: sluice only sends traffic to
+# endpoints whose EndpointSlice condition "ready" is true, and that condition
+# follows the pod readiness.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-a
+  namespace: demo
+  labels:
+    app.kubernetes.io/name: echo-a
+    app.kubernetes.io/part-of: sluice-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: echo-a
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: echo-a
+        app.kubernetes.io/part-of: sluice-demo
+    spec:
+      containers:
+        - name: echo
+          image: mendhak/http-https-echo:41
+          env:
+            - name: HTTP_PORT
+              value: "8080"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-a
+  namespace: demo
+  labels:
+    app.kubernetes.io/name: echo-a
+    app.kubernetes.io/part-of: sluice-demo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: echo-a
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

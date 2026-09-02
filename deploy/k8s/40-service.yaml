@@ -1,0 +1,21 @@
+# Entry point for client traffic. NodePort 30080 is what deploy/kind/cluster.yaml
+# maps to 127.0.0.1:8080 on the host, so "curl http://127.0.0.1:8080/" reaches
+# the proxy. Only the proxy port is exposed; the admin port (/healthz, /readyz,
+# /metrics) stays inside the cluster and is reached with kubectl port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sluice
+  namespace: sluice-system
+  labels:
+    app.kubernetes.io/name: sluice
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: sluice
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
+      protocol: TCP

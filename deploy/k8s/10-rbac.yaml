@@ -1,0 +1,46 @@
+# Identity and permissions for the controller. sluice only reads: it watches
+# Ingresses and IngressClasses to learn the routes, Services and EndpointSlices
+# to resolve the backends. It never writes to the API server (no Ingress
+# status, no events, no leases), so no create, update or patch verbs appear
+# here. See docs/design/kubernetes.md section 6.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sluice
+  namespace: sluice-system
+  labels:
+    app.kubernetes.io/name: sluice
+---
+# Ingresses can be in any namespace, so this must be a ClusterRole rather than
+# a Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sluice
+  labels:
+    app.kubernetes.io/name: sluice
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sluice
+  labels:
+    app.kubernetes.io/name: sluice
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sluice
+subjects:
+  - kind: ServiceAccount
+    name: sluice
+    namespace: sluice-system

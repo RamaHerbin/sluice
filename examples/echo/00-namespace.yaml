@@ -1,0 +1,8 @@
+# Namespace for the demo backends and their Ingress. Deleting it removes the
+# whole demo: kubectl delete -f examples/echo/
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    app.kubernetes.io/part-of: sluice-demo

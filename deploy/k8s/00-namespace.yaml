@@ -1,0 +1,9 @@
+# Namespace for the sluice controller itself. Everything in deploy/k8s/ that is
+# namespaced lives here. The demo backends live in their own namespace (see
+# examples/echo/) so that the proxy and the things it routes to stay separate.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sluice-system
+  labels:
+    app.kubernetes.io/name: sluice

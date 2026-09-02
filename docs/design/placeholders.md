@@ -156,7 +156,7 @@ How they surface:
 | 34 | `{http.request.host}`, `Context{Request: nil}` | `""` |
 | 35 | `{upstream.address}`, `UpstreamAddress: ""` | `""` |
 | 36 | `{k8s.route}`, header value `{k8s.service}` copied via `{http.request.header.X}` | literal `{k8s.service}` (no recursion) |
-| 37 | `{http.request.header.A}` repeated 200 times, `A` = 100 bytes | `""` (20000 > 8192, dropped) |
+| 37 | `{http.request.header.A}` repeated 178 times (4094 bytes, the largest source that passes row 21), `A` = 100 bytes | `""` (17800 > 8192, dropped) |
 
 `ValidateHeaderName(name)`.
 

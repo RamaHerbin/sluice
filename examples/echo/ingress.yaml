@@ -1,0 +1,46 @@
+# The demo routes. spec.ingressClassName names the IngressClass shipped in
+# deploy/k8s/20-ingressclass.yaml; without it sluice ignores the Ingress.
+#
+# Host demo.localtest.me was chosen because *.localtest.me resolves to
+# 127.0.0.1 in public DNS, but the demo passes the Host header explicitly so
+# no DNS is needed. Both paths are Prefix: /a matches /a and /a/anything, not
+# /ab.
+#
+# The two annotations are sluice's header rules, one "Name: value" per line.
+# Values may reference placeholders such as {k8s.route} (namespace/name of
+# this Ingress) and {upstream.address} (the host:port the request was sent
+# to). An unknown placeholder makes sluice skip this Ingress with a warning
+# and leave every other Ingress untouched. See docs/design/placeholders.md.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo
+  namespace: demo
+  labels:
+    app.kubernetes.io/part-of: sluice-demo
+  annotations:
+    sluice.dev/request-headers: |
+      X-Sluice-Route: {k8s.route}
+      X-Sluice-Upstream: {upstream.address}
+    sluice.dev/response-headers: |
+      X-Served-By: sluice
+spec:
+  ingressClassName: sluice
+  rules:
+    - host: demo.localtest.me
+      http:
+        paths:
+          - path: /a
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-a
+                port:
+                  number: 80
+          - path: /b
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-b
+                port:
+                  number: 80

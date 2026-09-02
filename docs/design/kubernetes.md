@@ -77,7 +77,7 @@ colima start --cpu 4 --memory 8 --disk 60 --vm-type vz --mount-type virtiofs
 - Colima is compatible with kind and forwards published ports to the host.
 - `deploy/kind/cluster.yaml`: one control-plane node with `extraPortMappings` containerPort 30080 -> hostPort 8080 on 127.0.0.1. sluice runs as a Deployment behind a `NodePort` Service on 30080. No cloud-provider-kind (needs privileges).
 - Image: `docker build -t sluice:dev .` then `kind load docker-image sluice:dev`; `imagePullPolicy: IfNotPresent`; never `:latest` (kind forces `Always` on it).
-- Demo backend: `mendhak/http-https-echo:41` (arm64, echoes headers as JSON, listens on 8080). Two Deployments `echo-a` and `echo-b` behind ClusterIP Services and one Ingress.
+- Demo backend: `mendhak/http-https-echo:41` (arm64, echoes headers as JSON, listens on 8080). Two Deployments `echo-a` and `echo-b` behind ClusterIP Services and one Ingress, all in `examples/echo/` (see `examples/README.md`).
 - Dockerfile: builder `golang:1.26-alpine`, `CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w"`, runtime `gcr.io/distroless/static-debian13:nonroot` (Debian 12 reaches end of life in September 2026), `USER nonroot:nonroot`, ports 8080 (proxy) and 9090 (admin).
 - golangci-lint v2 config: `version: "2"`, `run.timeout: 5m`, `linters.default: standard` plus `misspell`, `unconvert`; `formatters.enable: [gofmt, goimports]`.
 - GitHub Actions: `actions/checkout@v7`, `actions/setup-go@v7` (`go-version-file: go.mod`, module cache on), `golangci/golangci-lint-action@v9` (`version: v2.13.2`), gofmt check, `go vet`, `go test -race -count=1 ./...`, `docker build` without push.

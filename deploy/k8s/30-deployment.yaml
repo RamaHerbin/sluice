@@ -1,0 +1,82 @@
+# The controller and proxy in one process, one replica. The image is built by
+# "make docker-build" and copied into the kind node by "make kind-load", hence
+# the local tag and IfNotPresent (":latest" would force a pull that fails).
+#
+# The runtime image is distroless: no shell, so probes are httpGet and there
+# is no preStop hook. Shutdown relies on SIGTERM: the process flips /readyz to
+# 503, drains for up to 20 seconds and exits, which fits within the 30 second
+# grace period.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sluice
+  namespace: sluice-system
+  labels:
+    app.kubernetes.io/name: sluice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sluice
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sluice
+    spec:
+      serviceAccountName: sluice
+      # The controller talks to the API server with the ServiceAccount token.
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # 65532 is the "nonroot" user of the distroless image.
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sluice
+          image: sluice:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-ingress-class=sluice"
+            - "-listen=:8080"
+            - "-admin=:9090"
+            - "-log-json"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: admin
+              containerPort: 9090
+              protocol: TCP
+          # /readyz answers 200 only after the informers have synced and the
+          # first routing table has been published, so the Service does not
+          # send traffic to a pod that would answer 404 for everything.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            periodSeconds: 5
+            failureThreshold: 3
+          # /healthz answers 200 as soon as the admin server listens.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

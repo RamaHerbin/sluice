@@ -7,8 +7,9 @@
 package router
 
 import (
-	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,8 +27,11 @@ type Header struct {
 
 // Route is a compiled route, ready to serve requests.
 type Route struct {
-	Key      model.RouteKey
-	Host     string
+	Key  model.RouteKey
+	Host string
+	// Path is the matching path. For a Prefix route one trailing slash has
+	// been trimmed ("/foo/" is stored as "/foo"), except for "/" itself. An
+	// Exact path is stored as given.
 	Path     string
 	PathType model.PathType
 	// Namespace and Service identify the backend Service and feed the
@@ -49,12 +53,29 @@ type Table struct {
 	Hash    string
 	BuiltAt time.Time
 
-	// TODO(wave-2, model+router agent): unexported matching structures:
-	// exact hosts map; wildcard hosts map keyed by the literal "*.suffix"
-	// (a wildcard matches exactly one label, so the only candidate key for a
-	// request host is "*" + host[firstDot:]); catch-all for empty host. Per
-	// host: an exact-path map and a prefix slice sorted by length descending.
+	// routes holds every compiled route, including a route shadowed by a
+	// conflicting one (same host, path and type from another Ingress), so
+	// Len reports what the snapshot contained.
 	routes []*Route
+	// exact maps a lowercase host to its routes.
+	exact map[string]*hostRoutes
+	// wildcard maps the literal route host "*.suffix" to its routes. A
+	// wildcard matches exactly one label, so the only candidate key for a
+	// request host is "*" + host[firstDot:].
+	wildcard map[string]*hostRoutes
+	// catchAll holds the routes with an empty host, nil when there are none.
+	catchAll *hostRoutes
+}
+
+// hostRoutes is the set of routes sharing one host value.
+type hostRoutes struct {
+	// exact maps an Exact path to its route.
+	exact map[string]*Route
+	// prefixes holds the Prefix routes sorted by path length descending, so
+	// a linear scan finds the longest matching prefix first. Ties in length
+	// are ordered by creation time then key for determinism only: two
+	// distinct prefixes of equal length never both match one path.
+	prefixes []*Route
 }
 
 // RouteError wraps a validation error with the route it concerns, so a log
@@ -66,19 +87,6 @@ type RouteError struct {
 
 func (e *RouteError) Error() string { return fmt.Sprintf("route %s: %v", e.Key, e.Err) }
 func (e *RouteError) Unwrap() error { return e.Err }
-
-// Compile validates s and builds a Table. It is the sole validator of the
-// model. Rejected, each wrapped in a *RouteError: a path not starting with
-// "/"; an invalid or non-lowercase host, or a wildcard not in the leftmost
-// label; a duplicate (host, path, type) with the same route key; a backend
-// key with no matching Backend; header rules failing
-// model.ValidateHeaderRules or placeholders.ValidateHeaderName; a header
-// value failing placeholders.Parse. Pickers are built from Ready endpoints
-// only. Nothing is partially applied on error.
-func Compile(s *model.Snapshot) (*Table, error) {
-	// TODO(wave-2, model+router agent): implement.
-	return nil, errors.New("router: not implemented")
-}
 
 // Empty returns a table with no routes. Every Match on it reports false.
 func Empty() *Table {
@@ -100,12 +108,67 @@ func Empty() *Table {
 // is equivalent to "longest path, Exact beats Prefix at equal length"
 // because an Exact match always spans the whole request path.
 func (t *Table) Match(host, path string) (*Route, bool) {
-	// TODO(wave-2, model+router agent): implement priority rules.
+	h := normalizeHost(host)
+	if h != "" {
+		// Lookups on a nil map are fine, so Empty() needs no special case.
+		if hr, ok := t.exact[h]; ok {
+			return hr.match(path)
+		}
+		// The leftmost label must be non-empty for a wildcard to match it,
+		// hence dot > 0 rather than dot >= 0.
+		if dot := strings.IndexByte(h, '.'); dot > 0 {
+			if hr, ok := t.wildcard["*"+h[dot:]]; ok {
+				return hr.match(path)
+			}
+		}
+	}
+	if t.catchAll != nil {
+		return t.catchAll.match(path)
+	}
 	return nil, false
 }
 
-// Len returns the number of routes in the table.
+// Len returns the number of compiled routes, including routes shadowed by a
+// conflicting route with an older Created (they are kept for logging).
 func (t *Table) Len() int { return len(t.routes) }
+
+// normalizeHost applies the Match host normalization: port stripped when
+// net.SplitHostPort accepts the value, one trailing dot removed, lowercased.
+func normalizeHost(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(host, ".")
+	return strings.ToLower(host)
+}
+
+// match finds the best route for path within one host: the Exact route for
+// the whole path when there is one, otherwise the longest matching Prefix.
+func (hr *hostRoutes) match(path string) (*Route, bool) {
+	if r, ok := hr.exact[path]; ok {
+		return r, true
+	}
+	for _, r := range hr.prefixes {
+		if prefixMatches(r.Path, path) {
+			return r, true
+		}
+	}
+	return nil, false
+}
+
+// prefixMatches reports whether path is element-wise under prefix, where
+// prefix has already had its trailing slash trimmed: "/foo" matches "/foo",
+// "/foo/" and "/foo/bar" but not "/foobar". The prefix "/" matches every
+// path.
+func prefixMatches(prefix, path string) bool {
+	if prefix == "/" {
+		return true
+	}
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	return len(path) == len(prefix) || path[len(prefix)] == '/'
+}
 
 // Store publishes tables atomically and keeps the last valid one.
 //
@@ -133,7 +196,28 @@ func (s *Store) Current() *Table { return s.cur.Load() }
 // current table is unchanged. changed is false when the new snapshot hashes
 // identically to the current table.
 func (s *Store) Apply(snap *model.Snapshot) (t *Table, changed bool, err error) {
-	// TODO(wave-2, model+router agent): implement (lock, Normalize, Compile,
-	// hash compare, version++, stamp, cur.Store).
-	return nil, false, errors.New("router: not implemented")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Normalize before both Compile and Hash: the hash covers slice order,
+	// and Compile's tie-breaks must not depend on the producer's order.
+	snap.Normalize()
+	t, err = Compile(snap)
+	if err != nil {
+		// Nothing is published. The error already names the route.
+		return nil, false, err
+	}
+
+	hash := snap.Hash()
+	cur := s.cur.Load()
+	if cur.Hash == hash {
+		return cur, false, nil
+	}
+
+	s.version++
+	t.Version = s.version
+	t.Hash = hash
+	t.BuiltAt = time.Now()
+	s.cur.Store(t)
+	return t, true, nil
 }

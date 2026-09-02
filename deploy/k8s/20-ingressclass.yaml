@@ -1,0 +1,16 @@
+# The IngressClass an Ingress names in spec.ingressClassName to be served by
+# sluice. spec.controller is the controller identity the Deployment below runs
+# with (-ingress-class=sluice selects this object by name; the controller then
+# claims every Ingress whose class points at this controller value).
+#
+# It is deliberately not annotated with
+# ingressclass.kubernetes.io/is-default-class, so Ingresses that name no class
+# are left alone. See docs/design/kubernetes.md section 3.
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: sluice
+  labels:
+    app.kubernetes.io/name: sluice
+spec:
+  controller: sluice.dev/ingress-controller

@@ -107,7 +107,7 @@ make kind-up            # cluster "sluice", 127.0.0.1:8080 -> NodePort 30080
 make docker-build       # sluice:dev, never :latest (kind forces pull Always on it)
 make kind-load          # copies the image into the kind node
 make deploy             # deploy/k8s/: namespace sluice-system, RBAC, Deployment sluice, NodePort Service, IngressClass
-kubectl apply -f <demo manifests>   # namespace demo, deployments echo-a and echo-b, ingress demo
+kubectl apply -f examples/echo/   # namespace demo, deployments echo-a and echo-b, ingress demo
 make demo
 make kind-down
 ```
@@ -130,7 +130,7 @@ first. `PROXY_ADDR`, `DEMO_HOST`, `ADMIN_PORT`, `SLUICE_NS` and `DEMO_NS` are
 overridable through the environment. The port-forward is killed by an EXIT
 trap.
 
-The demo manifests do not exist yet. The script is written against the names
+The demo manifests live in `examples/echo/`. The script is written against the names
 agreed in the design: namespace `demo`, Deployments `echo-a` and `echo-b`,
 Ingress `demo` for host `demo.localtest.me` with `/a` and `/b`. `examples/echo/`
 is the expected home for them.
@@ -157,7 +157,7 @@ Not verifiable today and therefore untested:
   stopped. The Dockerfile was reviewed by hand only.
 - `make kind-up`, `make kind-load`, `make deploy`, `make undeploy`, `make demo`,
   `make kind-down`: kind and kubectl are not installed, and `deploy/k8s/` plus
-  the demo manifests do not exist yet.
+  the demo manifests in `examples/echo/` were not applied to a real cluster.
 - `make lint` with golangci-lint present, and the `.golangci.yml` v2 schema
   against a real binary.
 - The workflow itself has not run on GitHub yet.
@@ -205,7 +205,7 @@ should validate in this order, each step being cheap to repeat:
   logging it at startup makes the flag useful; no Makefile change needed.
 - `deploy/k8s/` is empty. `make deploy` and `make undeploy` will fail with
   "no objects passed to apply" until the manifests land.
-- The demo manifests (`examples/echo/` presumably) do not exist. `hack/demo.sh`
+- The demo manifests now live in `examples/echo/`. `hack/demo.sh`
   stops with a clear message when namespace `demo` is missing.
 - `hack/check-boundary.sh` checks non-test code only (section 4).
 - `.dockerignore` excludes `**/*.md`, `docs`, `deploy`, `examples`, `hack`,
