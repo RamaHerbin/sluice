@@ -1,7 +1,11 @@
 // Command sluice is a Kubernetes-only reverse proxy and ingress controller.
 //
-// Slice 1 state: static routes from flags, no Kubernetes. The controller is
-// wired in at slice 4.
+// It watches Ingress, IngressClass, Service and EndpointSlice objects,
+// compiles them into an immutable routing table and serves HTTP with it.
+// There is no configuration file: Kubernetes is the only configuration
+// source (ADR 0006). Startup order: admin server, informers, initial sync,
+// readiness, proxy server. Shutdown order: readiness off, servers drained,
+// informers stopped, idle upstream connections closed.
 package main
 
 import (
@@ -13,12 +17,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/RamaHerbin/sluice/internal/controller"
-	"github.com/RamaHerbin/sluice/internal/model"
 	"github.com/RamaHerbin/sluice/internal/observability"
 	"github.com/RamaHerbin/sluice/internal/proxy"
 	"github.com/RamaHerbin/sluice/internal/router"
@@ -27,7 +30,7 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-// Compile-time checks that observability satisfies the consumer interfaces.
+// Compile-time checks that the concrete types satisfy the consumer interfaces.
 var (
 	_ proxy.Metrics      = (*observability.Metrics)(nil)
 	_ controller.Metrics = (*observability.Metrics)(nil)
@@ -35,11 +38,7 @@ var (
 	_ controller.Sink    = (*router.Store)(nil)
 )
 
-// routeFlags collects repeatable -route host/path=addr[,addr] flags.
-type routeFlags []string
-
-func (r *routeFlags) String() string     { return strings.Join(*r, " ") }
-func (r *routeFlags) Set(v string) error { *r = append(*r, v); return nil }
+const shutdownTimeout = 20 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -50,35 +49,38 @@ func main() {
 
 func run() error {
 	var (
-		listen   = flag.String("listen", ":8080", "proxy listen address")
-		admin    = flag.String("admin", ":9090", "admin listen address (/healthz /readyz /metrics)")
-		logJSON  = flag.Bool("log-json", false, "log as JSON instead of text")
-		logLevel = flag.String("log-level", "info", "log level: debug, info, warn, error")
-		routes   routeFlags
+		listen       = flag.String("listen", ":8080", "proxy listen address")
+		admin        = flag.String("admin", ":9090", "admin listen address (/healthz /readyz /metrics)")
+		kubeconfig   = flag.String("kubeconfig", "", "path to a kubeconfig file; empty means in-cluster configuration")
+		ingressClass = flag.String("ingress-class", controller.DefaultIngressClass, "name of the IngressClass to claim")
+		namespace    = flag.String("namespace", "", "watch only this namespace instead of the whole cluster")
+		logJSON      = flag.Bool("log-json", false, "log as JSON instead of text")
+		logLevel     = flag.String("log-level", "info", "log level: debug, info, warn, error")
+		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
-	flag.Var(&routes, "route", "static route host/path=addr[,addr] (repeatable)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
 
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
 		return fmt.Errorf("parse -log-level: %w", err)
 	}
 	log := observability.NewLogger(level, *logJSON)
-
 	metrics := observability.NewMetrics()
 	ready := &observability.Readiness{}
-
 	store := router.NewStore()
-	snap, err := parseRoutes(routes)
-	if err != nil {
-		return err
-	}
-	table, _, err := store.Apply(snap)
-	if err != nil {
-		return fmt.Errorf("apply static routes: %w", err)
-	}
-	log.Info("config applied", "version", table.Version, "routes", table.Len())
 
+	client, err := controller.NewClientset(*kubeconfig)
+	if err != nil {
+		return fmt.Errorf("connect to kubernetes: %w", err)
+	}
+	ctrl := controller.New(client, store, log, metrics, controller.Options{
+		IngressClass: *ingressClass,
+		Namespace:    *namespace,
+	})
 	handler := proxy.New(store, proxy.Options{Logger: log, Metrics: metrics})
 
 	proxySrv := &http.Server{
@@ -93,27 +95,48 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Signals end the serving phase. The controller has its own context so
+	// informers keep running while the servers drain and stop only after.
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	ctrlCtx, stopController := context.WithCancel(context.Background())
+	defer stopController()
 
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := ctrl.Run(ctrlCtx); err != nil {
+			errc <- fmt.Errorf("controller: %w", err)
+		}
+	}()
 	go func() { errc <- serve(adminSrv, log) }()
-	go func() { errc <- serve(proxySrv, log) }()
+	log.Info("sluice starting", "version", version, "ingress_class", *ingressClass, "namespace", *namespace)
 
-	ready.Set(true)
-	metrics.SetReady(true)
-	log.Info("sluice started", "version", version, "listen", *listen, "admin", *admin)
-
+	var runErr error
 	select {
-	case <-ctx.Done():
-		log.Info("shutdown requested")
-	case err := <-errc:
-		return err
+	case <-ctrl.Synced():
+		table := store.Current()
+		ready.Set(true)
+		metrics.SetReady(true)
+		log.Info("initial sync complete, serving", "version", table.Version, "routes", table.Len(), "listen", *listen, "admin", *admin)
+		go func() { errc <- serve(proxySrv, log) }()
+		select {
+		case <-signalCtx.Done():
+			log.Info("shutdown requested")
+		case runErr = <-errc:
+			log.Error("component failed, shutting down", "error", runErr)
+		}
+	case <-signalCtx.Done():
+		log.Info("shutdown requested before initial sync")
+	case runErr = <-errc:
+		log.Error("startup failed", "error", runErr)
 	}
 
 	ready.Set(false)
 	metrics.SetReady(false)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	var shutdownErr error
 	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
@@ -122,8 +145,11 @@ func run() error {
 	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown admin server: %w", err))
 	}
+	stopController()
+	wg.Wait()
 	handler.CloseIdleConnections()
-	return shutdownErr
+	log.Info("sluice stopped")
+	return errors.Join(runErr, shutdownErr)
 }
 
 func serve(srv *http.Server, log *slog.Logger) error {
@@ -132,36 +158,4 @@ func serve(srv *http.Server, log *slog.Logger) error {
 		return fmt.Errorf("listen %s: %w", srv.Addr, err)
 	}
 	return nil
-}
-
-// parseRoutes turns -route flags into a snapshot. Each flag reads
-// host/path=addr[,addr]; host may be empty ("/path=addr") to match any host.
-func parseRoutes(flags routeFlags) (*model.Snapshot, error) {
-	snap := &model.Snapshot{}
-	for i, f := range flags {
-		target, addrs, ok := strings.Cut(f, "=")
-		if !ok || addrs == "" {
-			return nil, fmt.Errorf("route %q: want host/path=addr[,addr]", f)
-		}
-		host, path, ok := strings.Cut(target, "/")
-		if !ok {
-			return nil, fmt.Errorf("route %q: path must start with /", f)
-		}
-		path = "/" + path
-		key := model.BackendKey{Namespace: "static", Service: fmt.Sprintf("route-%d", i), Port: 0}
-		backend := model.Backend{Key: key}
-		for _, a := range strings.Split(addrs, ",") {
-			backend.Endpoints = append(backend.Endpoints, model.Endpoint{Address: strings.TrimSpace(a), Ready: true})
-		}
-		snap.Backends = append(snap.Backends, backend)
-		snap.Routes = append(snap.Routes, model.Route{
-			Key:      model.RouteKey{Namespace: "static", Name: fmt.Sprintf("route-%d", i)},
-			Host:     host,
-			Path:     path,
-			PathType: model.PathPrefix,
-			Backend:  key,
-			Created:  time.Now(),
-		})
-	}
-	return snap, nil
 }
