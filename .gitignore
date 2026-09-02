@@ -1,0 +1,14 @@
+# Build output
+/bin/
+*.test
+*.out
+coverage.html
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local kube/kind artefacts
+/kubeconfig*
