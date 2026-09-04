@@ -260,7 +260,7 @@ func remoteIP(addr string) string {
 // stripCRLF removes every CR and LF byte from s. The common case, no such
 // byte at all, returns s without allocating.
 func stripCRLF(s string) string {
-	if strings.IndexAny(s, "\r\n") < 0 {
+	if !strings.ContainsAny(s, "\r\n") {
 		return s
 	}
 	var b strings.Builder

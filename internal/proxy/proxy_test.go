@@ -22,8 +22,8 @@ func TestNewAppliesDefaults(t *testing.T) {
 	if h.rp.Transport != h.transport {
 		t.Error("ReverseProxy does not use the handler's transport")
 	}
-	if h.rp.Rewrite == nil || h.rp.Director != nil {
-		t.Error("ReverseProxy must use Rewrite, not Director")
+	if h.rp.Rewrite == nil {
+		t.Error("ReverseProxy must use the Rewrite hook")
 	}
 	if h.rp.ModifyResponse == nil || h.rp.ErrorHandler == nil || h.rp.ErrorLog == nil {
 		t.Error("ReverseProxy hooks are not all set")

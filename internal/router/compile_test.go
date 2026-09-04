@@ -229,7 +229,7 @@ func TestCompileRejections(t *testing.T) {
 			if tbl != nil {
 				t.Error("Compile returned a table together with an error")
 			}
-			wantRouteError(t, err, keyOf("bad"))
+			_ = wantRouteError(t, err, keyOf("bad"))
 			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
 				t.Errorf("error %v does not wrap %v", err, tc.wantIs)
 			}
@@ -252,7 +252,7 @@ func TestCompileRejectionNeverEchoesHeaderValue(t *testing.T) {
 		},
 	}
 	_, err := Compile(snap)
-	wantRouteError(t, err, keyOf("bad"))
+	_ = wantRouteError(t, err, keyOf("bad"))
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("error %q echoes the header value", err.Error())
 	}
@@ -277,7 +277,7 @@ func TestCompileDuplicateRouteSameKeyRejected(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Compile(&model.Snapshot{Backends: oneBackend(), Routes: []model.Route{tc.a, tc.b}})
-			wantRouteError(t, err, keyOf("dup"))
+			_ = wantRouteError(t, err, keyOf("dup"))
 			if !strings.Contains(err.Error(), "duplicate route") {
 				t.Errorf("error %q does not say duplicate route", err.Error())
 			}
