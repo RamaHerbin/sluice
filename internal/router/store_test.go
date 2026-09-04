@@ -57,7 +57,7 @@ func TestScenario06InvalidConfigKeepsLastValid(t *testing.T) {
 	if err == nil {
 		t.Fatal("Apply(invalid) reported no error")
 	}
-	wantRouteError(t, err, keyOf("broken"))
+	_ = wantRouteError(t, err, keyOf("broken"))
 	if tbl != nil || changed {
 		t.Errorf("Apply(invalid) = (%v, %v), want (nil, false)", tbl, changed)
 	}
